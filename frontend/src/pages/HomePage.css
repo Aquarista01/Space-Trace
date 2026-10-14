@@ -1,0 +1,12 @@
+.home-feature-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.home-feature-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 40px -20px rgba(67, 45, 216, 0.25);
+}
+
+.home-features {
+  scroll-margin-top: 80px;
+}
