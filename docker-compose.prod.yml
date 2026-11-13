@@ -1,0 +1,86 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  seaweed:
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    command: ["mini", "-dir=/data"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+    ports:
+      - "127.0.0.1:${S3_PUBLISHED_PORT:-8333}:8333"
+    volumes:
+      - seaweeddata:/data
+
+  migrate:
+    build: ./backend
+    image: spacetrace-backend:latest
+    env_file: ./.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api1: &api
+    image: spacetrace-backend:latest
+    env_file: ./.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      S3_ENDPOINT: http://seaweed:8333
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT}
+      FRONTEND_ORIGIN: ${PUBLIC_ORIGIN}
+      GOOGLE_REDIRECT_URI: ${PUBLIC_ORIGIN}/api/v1/auth/google/callback
+      COOKIE_SECURE: ${COOKIE_SECURE}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      seaweed:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  api2:
+    <<: *api
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${PUBLIC_ORIGIN}
+    ports:
+      - "${WEB_PORT:-80}:80"
+    depends_on:
+      api1:
+        condition: service_healthy
+      api2:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  seaweeddata:
